@@ -1,6 +1,28 @@
 #ifndef BOARDCONFIG_H
 #define BOARDCONFIG_H
 
+// ==============================================
+// PERIPHERAL ENABLE/DISABLE OPTIONS
+// ==============================================
+// Set to false to disable peripherals that aren't connected
+#define ENABLE_GPS          true    // Set to false if no GPS module connected
+#define ENABLE_IMU          true    // Set to false if no IMU connected  
+#define ENABLE_SD_CARD      true    // Set to false if no SD card
+#define ENABLE_WIFI         false   // Set to false to disable WiFi
+#define ENABLE_BLE          true    // Set to false to disable BLE
+#define ENABLE_TOUCH        true    // Set to false if touch not working
+
+// Retry and timeout settings
+#define GPS_INIT_TIMEOUT_MS     10000   // 10 seconds to detect GPS
+#define IMU_INIT_TIMEOUT_MS     5000    // 5 seconds to detect IMU
+#define WIFI_CONNECT_TIMEOUT_MS 20000   // 20 seconds to connect WiFi
+#define SD_INIT_RETRIES         3       // Number of SD init attempts
+
+// Debug options
+#define DEBUG_PERIPHERAL_INIT   true    // Print detailed init info
+#define DEBUG_MISSING_HARDWARE  true    // Warn about missing hardware
+
+// WiFi Configuration
 #define WIFI_SSID "Puchatkova"
 #define WIFI_PASSWORD "Internet2@"
 
