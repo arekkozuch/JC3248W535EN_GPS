@@ -1,11 +1,8 @@
-#include <JC3248W535EN-Touch-LCD.h>
 #include <Arduino_GFX_Library.h>
-#include <WiFi.h>
+#include <Wire.h>
 
 // Debug configuration
 #define DEBUG_SERIAL 1
-#define USE_DIRECT_GFX 1  // Set to 1 to bypass library and use direct GFX
-#define ENABLE_HARDWARE_TEST 1  // Enable hardware diagnostic tests
 
 // Hardware pin definitions from the library source
 #define GFX_BL 1
@@ -17,14 +14,11 @@
 #define TOUCH_INT_PIN 11
 #define AXS_MAX_TOUCH_NUMBER 1
 
-// Direct GFX setup (for fallback mode)
-#if USE_DIRECT_GFX
-  Arduino_DataBus *bus;
-  Arduino_GFX *gfx;
-  Arduino_Canvas *canvas;
-#endif
+// Direct GFX objects
+Arduino_DataBus *bus;
+Arduino_GFX *gfx;
+Arduino_Canvas *canvas;
 
-JC3248W535EN screen;
 uint16_t touchX, touchY;
 bool screenInitialized = false;
 bool touchInitialized = false;
@@ -32,7 +26,7 @@ unsigned long lastDebugTime = 0;
 unsigned long lastTouchTime = 0;
 int touchCount = 0;
 
-// Debug print functions
+// Debug functions
 void debugPrint(const String& message) {
   #if DEBUG_SERIAL
     Serial.print("[DEBUG] ");
@@ -60,24 +54,10 @@ void debugPrintHex(const String& label, uint32_t value) {
   #endif
 }
 
-// Hardware diagnostic functions
-#if ENABLE_HARDWARE_TEST
-void testBacklight() {
-  debugPrint("Testing backlight...");
-  pinMode(GFX_BL, OUTPUT);
+bool initializeTouch() {
+  debugPrint("Initializing touch controller...");
   
-  // Test backlight on/off
-  digitalWrite(GFX_BL, LOW);
-  debugPrint("Backlight OFF");
-  delay(500);
-  
-  digitalWrite(GFX_BL, HIGH);
-  debugPrint("Backlight ON");
-  delay(500);
-}
-
-void testI2C() {
-  debugPrint("Testing I2C bus...");
+  // Initialize I2C with correct pins
   Wire.begin(TOUCH_SDA, TOUCH_SCL);
   Wire.setClock(TOUCH_I2C_CLOCK);
   
@@ -85,31 +65,14 @@ void testI2C() {
   debugPrintValue("I2C SCL pin", TOUCH_SCL);
   debugPrintValue("I2C clock", TOUCH_I2C_CLOCK);
   
-  // Scan for I2C devices
-  debugPrint("Scanning I2C bus...");
-  int deviceCount = 0;
-  for (byte address = 1; address < 127; address++) {
-    Wire.beginTransmission(address);
-    byte error = Wire.endTransmission();
-    
-    if (error == 0) {
-      debugPrintHex("I2C device found at address", address);
-      deviceCount++;
-    }
-  }
-  debugPrintValue("Total I2C devices found", deviceCount);
-}
-
-void testTouchController() {
-  debugPrint("Testing touch controller...");
-  
-  // Reset touch controller
+  // Configure touch pins
   pinMode(TOUCH_INT_PIN, INPUT_PULLUP);
   pinMode(TOUCH_RST_PIN, OUTPUT);
   
   debugPrintValue("Touch interrupt pin", TOUCH_INT_PIN);
   debugPrintValue("Touch reset pin", TOUCH_RST_PIN);
   
+  // Reset sequence
   digitalWrite(TOUCH_RST_PIN, LOW);
   delay(200);
   digitalWrite(TOUCH_RST_PIN, HIGH);
@@ -117,35 +80,36 @@ void testTouchController() {
   
   debugPrint("Touch controller reset completed");
   
-  // Test touch communication
+  // Test communication
   Wire.beginTransmission(TOUCH_ADDR);
   byte error = Wire.endTransmission();
   
   if (error == 0) {
     debugPrint("Touch controller communication OK");
-    touchInitialized = true;
+    
+    // Scan for I2C devices to verify
+    debugPrint("I2C device scan:");
+    int deviceCount = 0;
+    for (byte address = 1; address < 127; address++) {
+      Wire.beginTransmission(address);
+      byte scanError = Wire.endTransmission();
+      
+      if (scanError == 0) {
+        debugPrintHex("I2C device found at address", address);
+        deviceCount++;
+      }
+    }
+    debugPrintValue("Total I2C devices found", deviceCount);
+    
+    return true;
   } else {
     debugPrint("Touch controller communication FAILED");
     debugPrintValue("I2C error code", error);
-    touchInitialized = false;
+    return false;
   }
 }
 
-void testSystemInfo() {
-  debugPrint("=== SYSTEM INFORMATION ===");
-  debugPrintValue("Free heap", ESP.getFreeHeap());
-  debugPrintValue("Chip revision", ESP.getChipRevision());
-  debugPrint("Chip model: " + String(ESP.getChipModel()));
-  debugPrintValue("CPU frequency (MHz)", ESP.getCpuFreqMHz());
-  debugPrintValue("Flash size", ESP.getFlashChipSize());
-  debugPrintValue("PSRAM size", ESP.getPsramSize());
-  debugPrint("SDK version: " + String(ESP.getSdkVersion()));
-}
-#endif
-
-// Initialize direct GFX mode
-#if USE_DIRECT_GFX
-bool initDirectGFX() {
+bool initializeDirectGFX() {
   debugPrint("Initializing direct GFX mode...");
   
   try {
@@ -162,8 +126,10 @@ bool initDirectGFX() {
     // Enable backlight
     pinMode(GFX_BL, OUTPUT);
     digitalWrite(GFX_BL, HIGH);
+    debugPrint("Backlight enabled");
     
-    canvas->fillScreen(0); // Clear screen
+    canvas->fillScreen(0x0000); // Clear to black
+    canvas->flush();
     debugPrint("Direct GFX initialized successfully!");
     return true;
   } catch (...) {
@@ -172,185 +138,136 @@ bool initDirectGFX() {
   }
 }
 
-void drawDirectGFX(const String& text, uint16_t x, uint16_t y, uint16_t color = 0xFFFF) {
+bool readTouchPoint(uint16_t &x, uint16_t &y) {
+  if (!touchInitialized) return false;
+  
+  uint8_t data[AXS_MAX_TOUCH_NUMBER * 6 + 2] = {0};
+  
+  // Define the read command array (from library source)
+  const uint8_t read_cmd[11] = {
+      0xb5, 0xab, 0xa5, 0x5a, 0x00, 0x00,
+      (uint8_t)((AXS_MAX_TOUCH_NUMBER * 6 + 2) >> 8),
+      (uint8_t)((AXS_MAX_TOUCH_NUMBER * 6 + 2) & 0xff),
+      0x00, 0x00, 0x00
+  };
+  
+  Wire.beginTransmission(TOUCH_ADDR);
+  Wire.write(read_cmd, 11);
+  if (Wire.endTransmission() != 0) {
+    return false;
+  }
+  
+  if (Wire.requestFrom(TOUCH_ADDR, sizeof(data)) != sizeof(data)) {
+    return false;
+  }
+  
+  for (int i = 0; i < sizeof(data); i++) {
+      data[i] = Wire.read();
+  }
+  
+  if (data[1] > 0 && data[1] <= AXS_MAX_TOUCH_NUMBER) {
+      uint16_t rawX = ((data[2] & 0x0F) << 8) | data[3];
+      uint16_t rawY = ((data[4] & 0x0F) << 8) | data[5];
+      
+      // Filter out invalid readings (from library source)
+      if (rawX == 273 && rawY == 273) return false;
+      if (rawX > 4000 || rawY > 4000) return false;
+      
+      // Apply coordinate mapping (from library source)
+      y = map(rawX, 0, 320, 320, 0);
+      x = rawY;
+      
+      return true;
+  }
+  
+  return false;
+}
+
+void drawText(const String& text, uint16_t x, uint16_t y, uint16_t color = 0xFFFF) {
+  // Apply rotation for text (matching library behavior)
+  uint8_t originalRotation = canvas->getRotation();
+  canvas->setRotation(1);
   canvas->setTextColor(color);
   canvas->setTextSize(2);
   canvas->setCursor(x, y);
   canvas->print(text);
+  canvas->setRotation(originalRotation);
   canvas->flush();
 }
 
-void clearDirectGFX(uint16_t color = 0x0000) {
+void clearScreen(uint16_t color = 0x0000) {
   canvas->fillScreen(color);
   canvas->flush();
 }
 
-void drawCircleDirectGFX(uint16_t x, uint16_t y, uint16_t radius, uint16_t color) {
-  // Transform coordinates to match screen orientation
+void drawCircle(uint16_t x, uint16_t y, uint16_t radius, uint16_t color) {
+  // Transform coordinates to match screen orientation (from library source)
   int16_t px = 320 - y;
   int16_t py = x;
   canvas->fillCircle(px, py, radius, color);
   canvas->flush();
 }
-#endif
 
-bool initializeScreen() {
-  debugPrint("Starting screen initialization...");
+void drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
+  // Transform coordinates to match screen orientation (from library source)
+  int16_t px = 320 - (y + h);
+  int16_t py = x;
+  int16_t pw = h;
+  int16_t ph = w;
   
-  #if USE_DIRECT_GFX
-    return initDirectGFX();
-  #else
-    // Hardware tests first
-    #if ENABLE_HARDWARE_TEST
-      testSystemInfo();
-      testBacklight();
-      testI2C();
-      testTouchController();
-    #endif
-    
-    // Try multiple initialization attempts
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      debugPrint("Screen init attempt " + String(attempt));
-      
-      delay(500 * attempt); // Progressive delay
-      
-      if (screen.begin()) {
-        debugPrint("Screen.begin() succeeded!");
-        delay(100);
-        
-        // Test basic functionality
-        screen.clear(255, 255, 255);
-        delay(50);
-        screen.flush();
-        
-        debugPrint("Screen initialization successful!");
-        return true;
-      } else {
-        debugPrint("Screen.begin() failed on attempt " + String(attempt));
-      }
-    }
-    
-    debugPrint("All screen initialization attempts failed!");
-    return false;
-  #endif
-}
-
-void displayText(const String& text, uint16_t x, uint16_t y) {
-  #if USE_DIRECT_GFX
-    drawDirectGFX(text, x, y);
-  #else
-    screen.setColor(0, 0, 0);
-    screen.prt(text, x, y, 2);
-    screen.flush();
-  #endif
-}
-
-void clearScreen() {
-  #if USE_DIRECT_GFX
-    clearDirectGFX();
-  #else
-    screen.clear(255, 255, 255);
-    screen.flush();
-  #endif
-}
-
-void drawTouchPoint(uint16_t x, uint16_t y) {
-  #if USE_DIRECT_GFX
-    drawCircleDirectGFX(x, y, 5, 0xF800); // Red color
-  #else
-    screen.setColor(255, 0, 0);
-    screen.drawFillCircle(x, y, 5);
-    screen.flush();
-  #endif
-}
-
-// Enhanced touch reading with debugging
-bool readTouch(uint16_t &x, uint16_t &y) {
-  #if USE_DIRECT_GFX
-    // For direct GFX mode, implement basic touch reading
-    if (!touchInitialized) return false;
-    
-    uint8_t data[AXS_MAX_TOUCH_NUMBER * 6 + 2] = {0};
-    
-    const uint8_t read_cmd[11] = {
-        0xb5, 0xab, 0xa5, 0x5a, 0x00, 0x00,
-        (uint8_t)((AXS_MAX_TOUCH_NUMBER * 6 + 2) >> 8),
-        (uint8_t)((AXS_MAX_TOUCH_NUMBER * 6 + 2) & 0xff),
-        0x00, 0x00, 0x00
-    };
-    
-    Wire.beginTransmission(TOUCH_ADDR);
-    Wire.write(read_cmd, 11);
-    if (Wire.endTransmission() != 0) {
-      debugPrint("Touch I2C write failed");
-      return false;
-    }
-    
-    if (Wire.requestFrom(TOUCH_ADDR, sizeof(data)) != sizeof(data)) {
-      debugPrint("Touch I2C read failed");
-      return false;
-    }
-    
-    for (int i = 0; i < sizeof(data); i++) {
-        data[i] = Wire.read();
-    }
-    
-    if (data[1] > 0 && data[1] <= AXS_MAX_TOUCH_NUMBER) {
-        uint16_t rawX = ((data[2] & 0x0F) << 8) | data[3];
-        uint16_t rawY = ((data[4] & 0x0F) << 8) | data[5];
-        
-        if (rawX == 273 && rawY == 273) return false;
-        if (rawX > 4000 || rawY > 4000) return false;
-        
-        y = map(rawX, 0, 320, 320, 0);
-        x = rawY;
-        
-        debugPrint("Direct touch: raw(" + String(rawX) + "," + String(rawY) + ") -> mapped(" + String(x) + "," + String(y) + ")");
-        return true;
-    }
-    
-    return false;
-  #else
-    return screen.getTouchPoint(x, y);
-  #endif
+  // Bounds checking
+  if (px < 0) px = 0;
+  if (py < 0) py = 0;
+  if (px + pw > 320) pw = 320 - px;
+  if (py + ph > 480) ph = 480 - py;
+  
+  canvas->fillRect(px, py, pw, ph, color);
+  canvas->flush();
 }
 
 void setup() {
   Serial.begin(115200);
   delay(4000);
   
-  debugPrint("=== JC32 Enhanced Debug Version ===");
-  debugPrint("DEBUG_SERIAL: " + String(DEBUG_SERIAL));
-  debugPrint("USE_DIRECT_GFX: " + String(USE_DIRECT_GFX));
-  debugPrint("ENABLE_HARDWARE_TEST: " + String(ENABLE_HARDWARE_TEST));
+  debugPrint("=== Direct GFX with Touch Implementation ===");
   
-  // Initialize screen
-  screenInitialized = initializeScreen();
+  // System info
+  debugPrintValue("Free heap at start", ESP.getFreeHeap());
+  debugPrintValue("Chip revision", ESP.getChipRevision());
+  debugPrint("Chip model: " + String(ESP.getChipModel()));
+  
+  // Initialize touch first
+  touchInitialized = initializeTouch();
+  
+  // Initialize display
+  screenInitialized = initializeDirectGFX();
   
   if (!screenInitialized) {
-    debugPrint("CRITICAL: Screen initialization failed completely!");
-    #if !USE_DIRECT_GFX
-      debugPrint("Consider setting USE_DIRECT_GFX to 1 and recompiling");
-    #endif
+    debugPrint("CRITICAL: Screen initialization failed!");
     return;
   }
   
-  // Initial display setup
-  clearScreen();
-  debugPrint("Screen cleared");
-  
-  displayText("Enhanced Debug", 80, 50);
-  displayText("Touch Mode", 80, 100);
-  
-  if (touchInitialized) {
-    displayText("Touch: Ready", 80, 150);
-  } else {
-    displayText("Touch: Failed", 80, 150);
+  if (!touchInitialized) {
+    debugPrint("WARNING: Touch initialization failed!");
   }
   
-  displayText("Touch screen!", 80, 200);
-  debugPrint("Initial display setup completed");
+  // Initial display setup
+  clearScreen(0x0000); // Black background
+  debugPrint("Screen cleared");
   
+  // Draw initial interface
+  drawText("Direct GFX Mode", 80, 50, 0xFFFF);  // White text
+  drawText("Touch Test", 80, 100, 0xFFFF);
+  
+  if (touchInitialized) {
+    drawText("Touch: Ready", 80, 150, 0x07E0);  // Green
+  } else {
+    drawText("Touch: Failed", 80, 150, 0xF800); // Red
+  }
+  
+  drawText("Touch the screen!", 80, 200, 0xFFE0); // Yellow
+  
+  debugPrint("Initial display setup completed");
   debugPrintValue("Final free heap", ESP.getFreeHeap());
 }
 
@@ -368,17 +285,12 @@ void loop() {
   }
   
   if (!screenInitialized) {
-    // Try to reinitialize if failed initially
-    if (currentTime > 30000) { // After 30 seconds, try once more
-      debugPrint("Attempting screen reinitialization...");
-      screenInitialized = initializeScreen();
-    }
     delay(1000);
     return;
   }
   
   // Handle touch input
-  bool touchDetected = readTouch(touchX, touchY);
+  bool touchDetected = readTouchPoint(touchX, touchY);
   
   if (touchDetected) {
     // Debounce touch
@@ -387,45 +299,50 @@ void loop() {
       
       debugPrint("Touch #" + String(touchCount) + " at X:" + String(touchX) + " Y:" + String(touchY));
       
-      // Clear and redraw
-      clearScreen();
+      // Clear screen
+      clearScreen(0x0000);
       
-      // Draw touch point
-      drawTouchPoint(touchX, touchY);
+      // Draw touch point with bright red circle
+      drawCircle(touchX, touchY, 8, 0xF800);
       
-      // Display comprehensive information
-      displayText("Touch #" + String(touchCount), 10, 30);
-      displayText("X:" + String(touchX) + " Y:" + String(touchY), 10, 70);
-      displayText("Heap:" + String(ESP.getFreeHeap()/1024) + "KB", 10, 110);
-      displayText("Up:" + String(currentTime/1000) + "s", 10, 150);
+      // Draw smaller white circle in center
+      drawCircle(touchX, touchY, 3, 0xFFFF);
       
-      // Display hardware status
+      // Display comprehensive information with colors
+      drawText("Touch #" + String(touchCount), 10, 30, 0xFFFF);   // White
+      drawText("X:" + String(touchX) + " Y:" + String(touchY), 10, 70, 0x07FF); // Cyan
+      drawText("Heap:" + String(ESP.getFreeHeap()/1024) + "KB", 10, 110, 0xFFE0); // Yellow
+      drawText("Up:" + String(currentTime/1000) + "s", 10, 150, 0xF81F); // Magenta
+      
+      // Hardware status
       if (touchInitialized) {
-        displayText("Touch: OK", 10, 190);
+        drawText("Touch: OK", 10, 190, 0x07E0);   // Green
       } else {
-        displayText("Touch: ERR", 10, 190);
+        drawText("Touch: ERR", 10, 190, 0xF800);  // Red
       }
       
-      #if USE_DIRECT_GFX
-        displayText("Mode: Direct", 10, 230);
-      #else
-        displayText("Mode: Library", 10, 230);
-      #endif
+      drawText("Mode: Direct", 10, 230, 0x001F);   // Blue
+      
+      // Draw a small rectangle as visual feedback
+      drawRect(touchX - 15, touchY - 15, 30, 4, 0xFFFF);
+      drawRect(touchX - 15, touchY + 11, 30, 4, 0xFFFF);
+      drawRect(touchX - 15, touchY - 15, 4, 30, 0xFFFF);
+      drawRect(touchX + 11, touchY - 15, 4, 30, 0xFFFF);
       
       lastTouchTime = currentTime;
       
-      // Memory leak detection
+      // Memory monitoring
       static int minHeap = ESP.getFreeHeap();
       int currentHeap = ESP.getFreeHeap();
       if (currentHeap < minHeap) {
         minHeap = currentHeap;
         debugPrintValue("New minimum heap", minHeap);
-        if (minHeap < 50000) { // Alert if heap gets low
+        if (minHeap < 50000) {
           debugPrint("WARNING: Low heap memory!");
         }
       }
     }
   }
   
-  delay(50); // Prevent overwhelming the system
+  delay(50); // Prevent system overload
 }
