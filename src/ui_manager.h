@@ -2,7 +2,14 @@
 #define UI_MANAGER_H
 
 #include <lvgl.h>
+#include <Arduino_GFX_Library.h>
 #include "data_structures.h"
+#include "boardconfig.h"
+
+// Forward declarations for Arduino_GFX objects
+extern Arduino_DataBus *bus;
+extern Arduino_GFX *gfx;
+extern Arduino_Canvas *canvas;
 
 class UIManager {
 public:
@@ -12,6 +19,18 @@ public:
     // Initialization
     void init(SystemData* sysData, GPSData* gpsData, IMUData* imuData, 
               BatteryData* battData, PerformanceStats* perfData);
+    
+    // Hardware initialization for JC3248W535EN
+    bool initializeHardware();
+    bool initializeTouch();
+    void initializeLVGL();
+    
+    // LVGL callbacks (static functions)
+    static void lvgl_display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p);
+    static void lvgl_touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
+    
+    // Touch reading function
+    bool readTouchPoint(uint16_t &x, uint16_t &y);
     
     // Main update function
     void update();
@@ -70,7 +89,7 @@ private:
     lv_obj_t* menuButton;
     lv_obj_t* systemButton;
     
-    // Content panels for different screens
+    // Content panels for different screens (adapted for portrait 320x480)
     lv_obj_t* speedometerPanel;
     lv_obj_t* motionPanel;
     lv_obj_t* systemPanel;
@@ -147,7 +166,7 @@ private:
     void (*menuCallback)();
     void (*systemCallback)();
     
-    // Private methods
+    // Private methods for UI creation (adapted for 320x480 portrait)
     void createMainLayout();
     void createHeader();
     void createFooter();
@@ -158,6 +177,7 @@ private:
     void createSystemScreen();
     void createPerformanceScreen();
     
+    // Update methods (same logic as original, just different positions)
     void updateHeader();
     void updateStatusBar();
     void updateCurrentScreen();
@@ -169,7 +189,7 @@ private:
     void showCurrentScreen();
     void hideAllScreens();
     
-    // Utility functions
+    // Utility functions (same as original)
     void setBatteryIcon(uint8_t percentage, bool charging, bool connected);
     void setStatusIcon(lv_obj_t* icon, bool connected, const char* symbol);
     lv_color_t getSignalColor(int strength);

@@ -60,7 +60,7 @@ struct IMUData {
     bool calibrationInProgress = false;
 };
 
-// Enhanced battery monitoring with SY6970 PMU data
+// Enhanced battery monitoring with basic ADC monitoring for JC3248W535EN
 struct BatteryData {
     float voltage = 0.0;
     float current = 0.0;
@@ -130,7 +130,7 @@ enum ScreenType {
     SCREEN_PERFORMANCE = 3
 };
 
-// Touch zones for landscape mode (480x222)
+// Touch zones for portrait mode (320x480)
 struct TouchZone {
     uint16_t x, y, w, h;
     String label;
@@ -146,21 +146,21 @@ struct TouchZone {
 #define UI_COLOR_TEXT       lv_color_hex(0xFFFFFF)  // White
 #define UI_COLOR_TEXT_MUTED lv_color_hex(0xAAAAAA)  // Gray
 #define UI_COLOR_BACKGROUND lv_color_hex(0x000000)  // Black
-#define UI_COLOR_SURFACE    lv_color_hex(0x303030)  // Dark Gray (was too bright)
+#define UI_COLOR_SURFACE    lv_color_hex(0x303030)  // Dark Gray
 #define UI_COLOR_SURFACE_2  lv_color_hex(0x404040)  // Lighter Gray
 #define UI_COLOR_BORDER     lv_color_hex(0x555555)  // Border Gray
 #define UI_COLOR_INFO       lv_color_hex(0x0099FF)  // Light Blue
 #define UI_COLOR_PURPLE     lv_color_hex(0xAA00FF)  // Purple
 
-// Font sizes (LVGL built-in fonts)
-#define UI_FONT_LARGE       &lv_font_montserrat_28
-#define UI_FONT_MEDIUM      &lv_font_montserrat_22
-#define UI_FONT_SMALL       &lv_font_montserrat_18
-#define UI_FONT_EXTRA_LARGE &lv_font_montserrat_48
+// Font sizes - Now using properly enabled LVGL fonts
+#define UI_FONT_LARGE       &lv_font_montserrat_28  // Large font
+#define UI_FONT_MEDIUM      &lv_font_montserrat_22  // Medium font  
+#define UI_FONT_SMALL       &lv_font_montserrat_18  // Small font
+#define UI_FONT_EXTRA_LARGE &lv_font_montserrat_48  // Extra large font
 
-// Common UI dimensions for 480x222 landscape display
-#define UI_SCREEN_WIDTH     480
-#define UI_SCREEN_HEIGHT    222
+// Common UI dimensions for 320x480 portrait display (JC3248W535EN)
+#define UI_SCREEN_WIDTH     320
+#define UI_SCREEN_HEIGHT    480
 #define UI_MARGIN           0
 #define UI_HEADER_HEIGHT    40
 #define UI_FOOTER_HEIGHT    50
@@ -172,11 +172,11 @@ struct TouchZone {
 #define ICON_WIFI           "W"
 #define ICON_BLE            "B"
 #define ICON_SD             "S"
-#define ICON_BATTERY        ""
+#define ICON_BATTERY        "BAT"
 #define ICON_MOTION         "MOV"
 #define ICON_SPEED          "SPD"
 #define ICON_LOCATION       "LOC"
-#define ICON_TIME           ""
+#define ICON_TIME           "TIME"
 #define ICON_RECORD         "REC"
 #define ICON_STOP           "STOP"
 #define ICON_MENU           "MENU"
