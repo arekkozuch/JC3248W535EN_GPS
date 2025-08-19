@@ -916,15 +916,24 @@ void loop() {
     static unsigned long lastWiFiCheck = 0;
     static unsigned long lastPerfReset = 0;
     
-    // Handle LVGL tasks - this is critical for UI responsiveness
+    // Handle LVGL tasks - this is CRITICAL for UI responsiveness
     lv_timer_handler();
     uiManager.update();
     
-    // Process deferred file operations
+    // CRITICAL: Process deferred file operations (called in main loop - safe stack)
     processDeferredFileOperations();
     
-    // Process file transfers
+    // Process file transfers (ongoing transfers)
     processFileTransfer();
+    
+    // Update file transfer UI more frequently during transfer
+    if (fileTransfer.active) {
+        static unsigned long lastTransferUIUpdate = 0;
+        if (millis() - lastTransferUIUpdate > 500) {
+            uiManager.requestUpdate();
+            lastTransferUIUpdate = millis();
+        }
+    }
     
     // Update battery data
     updateBatteryData();
@@ -956,6 +965,28 @@ void loop() {
         perfStats.totalPackets = 0;
     }
     
+    // CRITICAL: Initialize GPS data with safe defaults if not already done
+    static bool gpsDataInitialized = false;
+    if (!gpsDataInitialized) {
+        // Initialize GPS data with safe default values
+        gpsData.timestamp = millis() / 1000;
+        gpsData.latitude = 0.0;
+        gpsData.longitude = 0.0;
+        gpsData.altitude = 0;
+        gpsData.speed = 0.0;
+        gpsData.heading = 0.0;
+        gpsData.fixType = 0;
+        gpsData.satellites = 0;
+        gpsData.year = 2025;
+        gpsData.month = 8;
+        gpsData.day = 19;
+        gpsData.hour = 12;
+        gpsData.minute = 0;
+        gpsData.second = 0;
+        gpsDataInitialized = true;
+        Serial.println("✅ GPS data initialized with safe defaults");
+    }
+    
     // Process GPS data or generate mock data
     bool hasGPSData = false;
     if (ENABLE_GPS && myGNSS.getPVT()) {
@@ -963,21 +994,76 @@ void loop() {
         unsigned long now = millis();
         unsigned long delta = now - lastPacketTime;
         
-        // Update GPS data structure
-        gpsData.timestamp = myGNSS.getUnixEpoch();
-        gpsData.latitude = myGNSS.getLatitude() / 1e7;
-        gpsData.longitude = myGNSS.getLongitude() / 1e7;
-        gpsData.altitude = myGNSS.getAltitude() / 1000;
-        gpsData.speed = myGNSS.getGroundSpeed() * 0.0036;
-        gpsData.heading = myGNSS.getHeading() / 100000.0;
-        gpsData.fixType = myGNSS.getFixType();
-        gpsData.satellites = myGNSS.getSIV();
-        gpsData.year = myGNSS.getYear();
-        gpsData.month = myGNSS.getMonth();
-        gpsData.day = myGNSS.getDay();
-        gpsData.hour = myGNSS.getHour();
-        gpsData.minute = myGNSS.getMinute();
-        gpsData.second = myGNSS.getSecond();
+        // SAFE: Update GPS data structure with bounds checking
+        uint32_t timestamp = myGNSS.getUnixEpoch();
+        if (timestamp > 0 && timestamp < 4000000000UL) {  // Reasonable timestamp range
+            gpsData.timestamp = timestamp;
+        }
+        
+        double lat = myGNSS.getLatitude() / 1e7;
+        if (lat >= -90.0 && lat <= 90.0) {
+            gpsData.latitude = lat;
+        }
+        
+        double lon = myGNSS.getLongitude() / 1e7;
+        if (lon >= -180.0 && lon <= 180.0) {
+            gpsData.longitude = lon;
+        }
+        
+        int32_t alt = myGNSS.getAltitude() / 1000;
+        if (alt >= -1000 && alt <= 10000) {
+            gpsData.altitude = alt;
+        }
+        
+        float speed = myGNSS.getGroundSpeed() * 0.0036;
+        if (speed >= 0 && speed <= 500) {
+            gpsData.speed = speed;
+        }
+        
+        float heading = myGNSS.getHeading() / 100000.0;
+        if (heading >= 0 && heading <= 360) {
+            gpsData.heading = heading;
+        }
+        
+        uint8_t fixType = myGNSS.getFixType();
+        if (fixType <= 5) {
+            gpsData.fixType = fixType;
+        }
+        
+        uint8_t sats = myGNSS.getSIV();
+        if (sats <= 50) {
+            gpsData.satellites = sats;
+        }
+        
+        uint16_t year = myGNSS.getYear();
+        if (year >= 2000 && year <= 2100) {
+            gpsData.year = year;
+        }
+        
+        uint8_t month = myGNSS.getMonth();
+        if (month >= 1 && month <= 12) {
+            gpsData.month = month;
+        }
+        
+        uint8_t day = myGNSS.getDay();
+        if (day >= 1 && day <= 31) {
+            gpsData.day = day;
+        }
+        
+        uint8_t hour = myGNSS.getHour();
+        if (hour <= 23) {
+            gpsData.hour = hour;
+        }
+        
+        uint8_t minute = myGNSS.getMinute();
+        if (minute <= 59) {
+            gpsData.minute = minute;
+        }
+        
+        uint8_t second = myGNSS.getSecond();
+        if (second <= 59) {
+            gpsData.second = second;
+        }
         
         lastPacketTime = now;
     } else if (!ENABLE_GPS) {
@@ -989,39 +1075,75 @@ void loop() {
     if (hasGPSData || !ENABLE_GPS) {
         unsigned long now = millis();
         unsigned long delta = now - lastPacketTime;
+        if (lastPacketTime == 0) delta = 0;  // Prevent invalid delta on first run
         
-        // Update performance stats
-        perfStats.totalPackets++;
-        if (lastPacketTime > 0) {
+        // Update performance stats with bounds checking
+        if (perfStats.totalPackets < ULONG_MAX) {
+            perfStats.totalPackets++;
+        }
+        
+        if (lastPacketTime > 0 && delta < 10000) {  // Reasonable delta range
             if (delta < perfStats.minDelta) perfStats.minDelta = delta;
-            if (delta > perfStats.maxDelta) perfStats.maxDelta = delta;
-            perfStats.avgDelta = (perfStats.avgDelta + delta) / 2;
+            if (delta > perfStats.maxDelta && delta < 10000) perfStats.maxDelta = delta;
+            if (perfStats.avgDelta == 0) {
+                perfStats.avgDelta = delta;
+            } else {
+                perfStats.avgDelta = (perfStats.avgDelta + delta) / 2;
+            }
         }
         lastPacketTime = now;
         
-        // Create GPS packet for transmission
+        // Create GPS packet for transmission with bounds checking
         GPSPacket packet;
+        memset(&packet, 0, sizeof(packet));  // Initialize all fields to zero
+        
         packet.timestamp = gpsData.timestamp;
-        packet.latitude = (int32_t)(gpsData.latitude * 1e7);
-        packet.longitude = (int32_t)(gpsData.longitude * 1e7);
-        packet.altitude = gpsData.altitude * 1000;  // m to mm
-        packet.speed = (uint16_t)(gpsData.speed / 0.0036);  // km/h to mm/s
-        packet.heading = (uint32_t)(gpsData.heading * 1e5);
+        
+        // Safe coordinate conversion with bounds checking
+        if (gpsData.latitude >= -90 && gpsData.latitude <= 90) {
+            packet.latitude = (int32_t)(gpsData.latitude * 1e7);
+        }
+        if (gpsData.longitude >= -180 && gpsData.longitude <= 180) {
+            packet.longitude = (int32_t)(gpsData.longitude * 1e7);
+        }
+        if (gpsData.altitude >= -1000 && gpsData.altitude <= 10000) {
+            packet.altitude = gpsData.altitude * 1000;  // m to mm
+        }
+        if (gpsData.speed >= 0 && gpsData.speed <= 500) {
+            packet.speed = (uint16_t)(gpsData.speed / 0.0036);  // km/h to mm/s
+        }
+        if (gpsData.heading >= 0 && gpsData.heading <= 360) {
+            packet.heading = (uint32_t)(gpsData.heading * 1e5);
+        }
+        
         packet.fixType = gpsData.fixType;
         packet.satellites = gpsData.satellites;
         
-        packet.battery_mv = (uint16_t)(batteryData.voltage * 1000.0f);
-        packet.battery_pct = batteryData.percentage;
+        // Safe battery data with bounds checking
+        if (batteryData.voltage >= 0 && batteryData.voltage <= 10) {
+            packet.battery_mv = (uint16_t)(batteryData.voltage * 1000.0f);
+        }
+        if (batteryData.percentage <= 100) {
+            packet.battery_pct = batteryData.percentage;
+        }
         
+        // Safe IMU data with bounds checking
         if (systemData.mpuAvailable || !ENABLE_IMU) {
-            packet.accel_x = (int16_t)(imuData.accelX * 1000);
-            packet.accel_y = (int16_t)(imuData.accelY * 1000);
-            packet.accel_z = (int16_t)(imuData.accelZ * 1000);
-            packet.gyro_x = (int16_t)(imuData.gyroX * 100);
-            packet.gyro_y = (int16_t)(imuData.gyroY * 100);
-        } else {
-            packet.accel_x = packet.accel_y = packet.accel_z = 0;
-            packet.gyro_x = packet.gyro_y = 0;
+            if (imuData.accelX >= -50 && imuData.accelX <= 50) {
+                packet.accel_x = (int16_t)(imuData.accelX * 1000);
+            }
+            if (imuData.accelY >= -50 && imuData.accelY <= 50) {
+                packet.accel_y = (int16_t)(imuData.accelY * 1000);
+            }
+            if (imuData.accelZ >= -50 && imuData.accelZ <= 50) {
+                packet.accel_z = (int16_t)(imuData.accelZ * 1000);
+            }
+            if (imuData.gyroX >= -2000 && imuData.gyroX <= 2000) {
+                packet.gyro_x = (int16_t)(imuData.gyroX * 100);
+            }
+            if (imuData.gyroY >= -2000 && imuData.gyroY <= 2000) {
+                packet.gyro_y = (int16_t)(imuData.gyroY * 100);
+            }
         }
         
         packet.pmu_status = (batteryData.isCharging ? 0x01 : 0x00) |
@@ -1051,42 +1173,57 @@ void loop() {
             if (logFile) {
                 size_t written = logFile.write((uint8_t*)&packet, sizeof(GPSPacket));
                 if (written != sizeof(GPSPacket)) {
-                    perfStats.droppedPackets++;
+                    if (perfStats.droppedPackets < ULONG_MAX) {
+                        perfStats.droppedPackets++;
+                    }
                 } else {
                     logFile.flush();
                 }
             }
         }
         
-        // Update UI if significant changes
-        static uint8_t lastFixType = 0;
-        static uint8_t lastSats = 0;
-        static float lastSpeed = 0;
+        // Update UI if significant changes (with bounds checking)
+        static uint8_t lastFixType = 255;  // Initialize to invalid value
+        static uint8_t lastSats = 255;
+        static float lastSpeed = -1;
         
         if (gpsData.fixType != lastFixType || 
             abs((int)gpsData.satellites - (int)lastSats) > 1 ||
-            abs(gpsData.speed - lastSpeed) > 1.0f) {
+            (lastSpeed >= 0 && abs(gpsData.speed - lastSpeed) > 1.0f)) {
             uiManager.requestUpdate();
             lastFixType = gpsData.fixType;
             lastSats = gpsData.satellites;
             lastSpeed = gpsData.speed;
         }
         
-        // Debug output every 10 seconds
+        // Debug output every 10 seconds with safe formatting
         if (now - lastDebugTime >= 10000) {
             lastDebugTime = now;
             
             String dataSource = ENABLE_GPS ? "GPS" : "MOCK";
-            debugPrintf("📊 %s: %02d/%02d/%04d %02d:%02d:%02d | ",
-                dataSource.c_str(), gpsData.day, gpsData.month, gpsData.year,
-                gpsData.hour, gpsData.minute, gpsData.second);
             
-            debugPrintf("Fix:%d Sats:%d Speed:%.1fkm/h Batt:%.1fV(%d%%)\n",
-                gpsData.fixType, gpsData.satellites, gpsData.speed, 
-                batteryData.voltage, batteryData.percentage);
+            // SAFE debug output with bounds checking
+            if (gpsData.year >= 2000 && gpsData.year <= 2100 &&
+                gpsData.month >= 1 && gpsData.month <= 12 &&
+                gpsData.day >= 1 && gpsData.day <= 31 &&
+                gpsData.hour <= 23 && gpsData.minute <= 59 && gpsData.second <= 59 &&
+                gpsData.speed >= 0 && gpsData.speed <= 500 &&
+                batteryData.voltage >= 0 && batteryData.voltage <= 10 &&
+                batteryData.percentage <= 100) {
+                
+                debugPrintf("📊 %s: %02d/%02d/%04d %02d:%02d:%02d | ",
+                    dataSource.c_str(), gpsData.day, gpsData.month, gpsData.year,
+                    gpsData.hour, gpsData.minute, gpsData.second);
+                
+                debugPrintf("Fix:%d Sats:%d Speed:%.1fkm/h Batt:%.1fV(%d%%)\n",
+                    gpsData.fixType, gpsData.satellites, gpsData.speed, 
+                    batteryData.voltage, batteryData.percentage);
+            }
             
-            debugPrintf("⚡ Perf: Δ=%lums Pkts:%lu Drop:%lu RAM:%d\n",
-                delta, perfStats.totalPackets, perfStats.droppedPackets, ESP.getFreeHeap());
+            if (delta < 10000) {  // Only print if delta is reasonable
+                debugPrintf("⚡ Perf: Δ=%lums Pkts:%lu Drop:%lu RAM:%d\n",
+                    delta, perfStats.totalPackets, perfStats.droppedPackets, ESP.getFreeHeap());
+            }
             
             // Peripheral status
             debugPrintf("🔗 Active: Display:✅ GPS:%s IMU:%s SD:%s WiFi:%s BLE:%s\n",
