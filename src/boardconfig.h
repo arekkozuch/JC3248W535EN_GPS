@@ -5,7 +5,7 @@
 // PERIPHERAL ENABLE/DISABLE OPTIONS
 // ==============================================
 // Set to false to disable peripherals that aren't connected
-#define ENABLE_GPS          false    // Set to false if no GPS module connected
+#define ENABLE_GPS          true    // Set to false if no GPS module connected
 #define ENABLE_IMU          false    // Set to false if no IMU connected  
 #define ENABLE_SD_CARD      true    // Set to false if no SD card
 #define ENABLE_WIFI         false   // Set to false to disable WiFi
