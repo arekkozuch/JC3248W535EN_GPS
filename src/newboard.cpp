@@ -7,7 +7,10 @@ void setup() {
   Serial.begin(115200);
     delay(4000);
   // Initialize the screen
-  screen.begin();
+  if (!screen.begin()) {
+    Serial.println("Screen initialization failed!");
+    return;
+  }
   Serial.println("Screen initialized successfully!");
   screen.clear(255, 255, 255);
   Serial.println("Screen cleared with white background!");
@@ -35,7 +38,7 @@ void loop() {
     Serial.print(touchX);
     Serial.print(" Y: ");
     Serial.println(touchY);
-        
+
     delay(100);  // Small delay to prevent too many readings
   }
 }
