@@ -1,15 +1,21 @@
 #ifndef BOARDCONFIG_H
 #define BOARDCONFIG_H
 
-// WiFi Configuration (keep from original)
 #define WIFI_SSID "Puchatkova"
 #define WIFI_PASSWORD "Internet2@"
 
-bool debugMode = false;
-bool wifiUDPEnabled = false;
+// External variable declarations (not definitions)
+extern bool debugMode;
+extern bool wifiUDPEnabled;
 
 // JC3248W535EN Hardware Pin Definitions
-// Display (AXS15231B controller - 320x480 QSPI)
+#define BOARD_I2C_SDA       4
+#define BOARD_I2C_SCL       8
+#define BOARD_SPI_MISO      13
+#define BOARD_SPI_MOSI      11
+#define BOARD_SPI_SCK       12
+
+// JC3248W535EN Display Configuration
 #define BOARD_TFT_WIDTH     320
 #define BOARD_TFT_HEIGHT    480
 #define BOARD_TFT_BL        1    // Backlight control
@@ -24,8 +30,6 @@ bool wifiUDPEnabled = false;
 
 // Touch Controller (I2C capacitive)
 #define TOUCH_ADDR          0x3B
-#define BOARD_I2C_SDA       4
-#define BOARD_I2C_SCL       8
 #define TOUCH_I2C_CLOCK     400000
 #define BOARD_TOUCH_RST     12
 #define BOARD_SENSOR_IRQ    11   // Touch interrupt
@@ -36,33 +40,28 @@ bool wifiUDPEnabled = false;
 #define GNSS_TX             18
 
 // Available GPIO pins for other peripherals
-// Based on JC3248W535EN schematic, these pins are available:
 #define BOARD_SD_CS         10   // SD card CS (if available)
-#define BOARD_SPI_MISO      13   // SPI MISO
-#define BOARD_SPI_MOSI      11   // SPI MOSI  
-#define BOARD_SPI_SCK       12   // SPI SCK
 
 // I2C for IMU (can share with touch or use different pins)
-// Using available GPIO pins for MPU6050
 #define IMU_I2C_SDA         5    // Available GPIO
 #define IMU_I2C_SCL         6    // Available GPIO
 
-// BLE Configuration (keep from original)
-const char* telemetryServiceUUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-const char* telemetryCharUUID    = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
-const char* configCharUUID       = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-const char* fileTransferCharUUID = "6e400005-b5a3-f393-e0a9-e50e24dcca9e";
+// BLE Configuration - External declarations
+extern const char* telemetryServiceUUID;
+extern const char* telemetryCharUUID;
+extern const char* configCharUUID;
+extern const char* fileTransferCharUUID;
 
-// System state
-bool sdCardAvailable = false;
-bool loggingActive = false;
-char currentLogFilename[64] = "";
+// System state - External declarations
+extern bool sdCardAvailable;
+extern bool loggingActive;
+extern char currentLogFilename[64];
 
-// IMU Constants (keep from original)
+// IMU Constants
 const float MOTION_THRESHOLD = 1.2;
 const float IMPACT_THRESHOLD = 2.5;
 
-// MPU6xxx I2C Configuration (using separate I2C bus)
+// MPU6xxx I2C Configuration
 #define MPU6xxx_ADDRESS 0x68
 #define MPU6xxx_WHO_AM_I 0x75
 #define MPU6xxx_PWR_MGMT_1 0x6B
@@ -72,24 +71,22 @@ const float IMPACT_THRESHOLD = 2.5;
 #define MPU6xxx_ACCEL_CONFIG 0x1C
 #define MPU6xxx_GYRO_CONFIG 0x1B
 
-// Performance monitoring
-static unsigned long lastPacketTime = 0;
-static unsigned long lastDebugTime = 0;
-static unsigned long lastWiFiCheck = 0;
-static unsigned long lastPerfReset = 0;
+// Performance monitoring - External declarations
+extern unsigned long lastPacketTime;
+extern unsigned long lastDebugTime;
+extern unsigned long lastWiFiCheck;
+extern unsigned long lastPerfReset;
 
-// File transfer deferred operations
-volatile bool pendingListFiles = false;
-volatile bool pendingStartTransfer = false;
-volatile bool pendingDeleteFile = false;
-volatile bool pendingCancelTransfer = false;
+// File transfer deferred operations - External declarations
+extern volatile bool pendingListFiles;
+extern volatile bool pendingStartTransfer;
+extern volatile bool pendingDeleteFile;
+extern volatile bool pendingCancelTransfer;
 
 // Power Management - JC3248W535EN doesn't have dedicated PMU
-// We'll use ADC for basic battery monitoring if needed
 #define ADC_BAT             7    // Available ADC pin for battery monitoring
 
 // Additional available GPIO pins on JC3248W535EN
-// (up to 12 GPIO available according to specs)
 #define GPIO_SPARE_1        9
 #define GPIO_SPARE_2        14
 #define GPIO_SPARE_3        15
