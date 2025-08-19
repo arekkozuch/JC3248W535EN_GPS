@@ -4,7 +4,7 @@
 
 // Debug configuration
 #define DEBUG_SERIAL 1
-#define USE_DIRECT_GFX 0  // Set to 1 to bypass library and use direct GFX
+#define USE_DIRECT_GFX 1  // Set to 1 to bypass library and use direct GFX
 #define ENABLE_HARDWARE_TEST 1  // Enable hardware diagnostic tests
 
 // Hardware pin definitions from the library source
