@@ -19,7 +19,7 @@
 #include "data_structures.h"
 #include "boardconfig.h"
 
-// Hardware objects
+// Hardware objects (conditionally initialized)
 SFE_UBLOX_GNSS myGNSS;
 Preferences preferences;
 HardwareSerial GNSS_Serial(2);  // Use UART2 for GPS
@@ -53,21 +53,32 @@ FileTransferState fileTransfer;
 File logFile;
 String pendingFilename = "";
 
-// Debug functions
+// Forward declarations
+class EnhancedConfigCallbacks;
+class EnhancedFileTransferCallbacks;
+class EnhancedServerCallbacks;
+
+// Debug functions with peripheral check
 void debugPrint(const char* message) {
-    if(debugMode) Serial.print(message);
+    if(debugMode && DEBUG_PERIPHERAL_INIT) Serial.print(message);
 }
 
 void debugPrintln(const String& message) {
-    if(debugMode) Serial.println(message);
+    if(debugMode && DEBUG_PERIPHERAL_INIT) Serial.println(message);
 }
 
 void debugPrintf(const char* format, ...) {
-    if(debugMode) {
+    if(debugMode && DEBUG_PERIPHERAL_INIT) {
         va_list args;
         va_start(args, format);
         Serial.printf(format, args);
         va_end(args);
+    }
+}
+
+void warnMissingHardware(const String& peripheral) {
+    if(DEBUG_MISSING_HARDWARE) {
+        Serial.printf("⚠️  %s not available - continuing without it\n", peripheral.c_str());
     }
 }
 
@@ -163,46 +174,6 @@ bool calibrateAccelerometer() {
     debugPrintf("📊 Accel offsets: X=%.4f, Y=%.4f, Z=%.4f\n", 
                   imuData.accelOffsetX, imuData.accelOffsetY, imuData.accelOffsetZ);
     
-    return true;
-}
-
-bool initMPU6050() {
-    debugPrintln("📄 Initializing IMU on separate I2C bus...");
-    
-    // Initialize separate I2C bus for IMU
-    IMU_Wire.begin(IMU_I2C_SDA, IMU_I2C_SCL);
-    IMU_Wire.setClock(400000);
-    
-    delay(100);
-    
-    uint8_t whoami = readRegister(MPU6xxx_WHO_AM_I);
-    debugPrintf("🔋 WHO_AM_I register: 0x%02X\n", whoami);
-    
-    switch (whoami) {
-        case 0x68:
-            debugPrintln("✅ Detected: MPU6050");
-            break;
-        case 0x70:
-            debugPrintln("✅ Detected: MPU6000 or MPU9250");
-            break;
-        case 0x71:
-            debugPrintln("✅ Detected: MPU9250");
-            break;
-        case 0x73:
-            debugPrintln("✅ Detected: MPU9255");
-            break;
-        default:
-            debugPrintf("⚠️ Unknown IMU type: 0x%02X (trying anyway...)\n", whoami);
-            break;
-    }
-    
-    writeRegister(MPU6xxx_PWR_MGMT_1, 0x00);
-    delay(100);
-    writeRegister(MPU6xxx_ACCEL_CONFIG, 0x00);
-    writeRegister(MPU6xxx_GYRO_CONFIG, 0x00);
-    
-    systemData.mpuAvailable = true;
-    debugPrintln("✅ IMU configured successfully on separate I2C bus");
     return true;
 }
 
@@ -322,34 +293,216 @@ void updateBatteryData() {
     uiManager.requestUpdate();
 }
 
-bool initSDCard() {
+// Robust peripheral initialization functions
+bool initGPS() {
+    if (!ENABLE_GPS) {
+        debugPrintln("🛰️ GPS disabled in configuration");
+        return false;
+    }
+    
+    debugPrintln("🛰️ Initializing GPS...");
+    unsigned long startTime = millis();
+    
+    // Try high speed first
+    GNSS_Serial.begin(921600, SERIAL_8N1, GNSS_RX, GNSS_TX);
+    delay(100);
+    
+    while (millis() - startTime < GPS_INIT_TIMEOUT_MS) {
+        if (myGNSS.begin(GNSS_Serial)) {
+            debugPrintln("✅ GPS detected at 921600 baud");
+            configureGNSS();
+            return true;
+        }
+        delay(500);
+    }
+    
+    // Try standard speed
+    GNSS_Serial.end();
+    delay(100);
+    GNSS_Serial.begin(115200, SERIAL_8N1, GNSS_RX, GNSS_TX);
+    delay(100);
+    
+    startTime = millis();
+    while (millis() - startTime < GPS_INIT_TIMEOUT_MS / 2) {
+        if (myGNSS.begin(GNSS_Serial)) {
+            debugPrintln("✅ GPS detected at 115200 baud");
+            configureGNSS();
+            return true;
+        }
+        delay(500);
+    }
+    
+    warnMissingHardware("GPS");
+    return false;
+}
+
+bool initIMU() {
+    if (!ENABLE_IMU) {
+        debugPrintln("📄 IMU disabled in configuration");
+        return false;
+    }
+    
+    debugPrintln("📄 Initializing IMU...");
+    unsigned long startTime = millis();
+    
+    // Initialize separate I2C bus for IMU
+    IMU_Wire.begin(IMU_I2C_SDA, IMU_I2C_SCL);
+    IMU_Wire.setClock(400000);
+    delay(100);
+    
+    while (millis() - startTime < IMU_INIT_TIMEOUT_MS) {
+        uint8_t whoami = readRegister(MPU6xxx_WHO_AM_I);
+        debugPrintf("🔋 WHO_AM_I register: 0x%02X\n", whoami);
+        
+        if (whoami == 0x68 || whoami == 0x70 || whoami == 0x71 || whoami == 0x73) {
+            debugPrintln("✅ IMU detected");
+            
+            writeRegister(MPU6xxx_PWR_MGMT_1, 0x00);
+            delay(100);
+            writeRegister(MPU6xxx_ACCEL_CONFIG, 0x00);
+            writeRegister(MPU6xxx_GYRO_CONFIG, 0x00);
+            
+            // Test read
+            int16_t testRead = readRegister16(MPU6xxx_ACCEL_XOUT_H);
+            if (testRead != -1 && testRead != 0) {
+                debugPrintln("✅ IMU communication verified");
+                calibrateAccelerometer();
+                return true;
+            }
+        }
+        delay(500);
+    }
+    
+    warnMissingHardware("IMU");
+    return false;
+}
+
+bool initSDCardRobust() {
+    if (!ENABLE_SD_CARD) {
+        debugPrintln("📱 SD Card disabled in configuration");
+        return false;
+    }
+    
     debugPrintln("📱 Initializing SD card...");
     
-    // Check if SD card functionality is available on JC3248W535EN
-    // This may need to be adapted based on actual SD card connection
-    if (!SD.begin(BOARD_SD_CS)) {
-        debugPrintln("❌ SD card not available on this board");
+    SPI.end();
+    delay(100);
+    SPI.begin(BOARD_SPI_SCK, BOARD_SPI_MISO, BOARD_SPI_MOSI);
+    delay(100);
+    
+    // Try different speeds
+    uint32_t speeds[] = {4000000, 1000000, 400000};
+    
+    for (int attempt = 0; attempt < SD_INIT_RETRIES; attempt++) {
+        for (int speedIdx = 0; speedIdx < 3; speedIdx++) {
+            if (SD.begin(BOARD_SD_CS, SPI, speeds[speedIdx])) {
+                uint8_t cardType = SD.cardType();
+                if (cardType != CARD_NONE) {
+                    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+                    debugPrintf("✅ SD Card: %lluMB at %d Hz\n", cardSize, speeds[speedIdx]);
+                    
+                    // Test write
+                    File testFile = SD.open("/test.tmp", FILE_WRITE);
+                    if (testFile) {
+                        testFile.println("GPS Logger Test");
+                        testFile.close();
+                        SD.remove("/test.tmp");
+                        return true;
+                    }
+                }
+            }
+            delay(500);
+        }
+        debugPrintf("SD init attempt %d/%d failed\n", attempt + 1, SD_INIT_RETRIES);
+    }
+    
+    warnMissingHardware("SD Card");
+    return false;
+}
+
+bool initWiFiRobust() {
+    if (!ENABLE_WIFI) {
+        debugPrintln("📡 WiFi disabled in configuration");
+        wifiUDPEnabled = false;
         return false;
     }
     
-    uint8_t cardType = SD.cardType();
-    if (cardType == CARD_NONE) {
-        debugPrintln("❌ No SD card detected");
-        return false;
+    debugPrintln("📡 Connecting to WiFi...");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startTime < WIFI_CONNECT_TIMEOUT_MS) {
+        delay(1000);
+        debugPrint(".");
     }
     
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    debugPrintf("✅ SD Card initialized, Size: %lluMB\n", cardSize);
+    if (WiFi.status() == WL_CONNECTED) {
+        debugPrintln("\n✅ WiFi connected!");
+        debugPrintf("📍 IP: %s\n", WiFi.localIP().toString().c_str());
+        wifiUDPEnabled = true;
+        return true;
+    } else {
+        debugPrintln("\n⚠️ WiFi connection failed - continuing without WiFi");
+        wifiUDPEnabled = false;
+        return false;
+    }
+}
+
+// Mock data generation for missing peripherals
+void generateMockGPSData() {
+    static float mockLat = 52.2297;  // Warsaw coordinates
+    static float mockLon = 21.0122;
+    static unsigned long lastMockUpdate = 0;
     
-    return true;
+    if (millis() - lastMockUpdate > 1000) {  // Update every second
+        gpsData.latitude = mockLat + (random(-100, 100) / 100000.0);
+        gpsData.longitude = mockLon + (random(-100, 100) / 100000.0);
+        gpsData.altitude = 100 + random(-10, 10);
+        gpsData.speed = random(0, 60);
+        gpsData.heading = random(0, 360);
+        gpsData.fixType = 3;  // 3D fix
+        gpsData.satellites = random(8, 12);
+        gpsData.timestamp = millis() / 1000;
+        
+        // Set current time (mock)
+        unsigned long timeNow = millis() / 1000;
+        gpsData.hour = (timeNow / 3600) % 24;
+        gpsData.minute = (timeNow / 60) % 60;
+        gpsData.second = timeNow % 60;
+        gpsData.day = 19;
+        gpsData.month = 8;
+        gpsData.year = 2025;
+        
+        lastMockUpdate = millis();
+    }
+}
+
+void generateMockIMUData() {
+    static unsigned long lastMockUpdate = 0;
+    
+    if (millis() - lastMockUpdate > 100) {  // Update every 100ms
+        imuData.accelX = (random(-100, 100) / 100.0);
+        imuData.accelY = (random(-100, 100) / 100.0);
+        imuData.accelZ = 1.0 + (random(-20, 20) / 100.0);
+        imuData.gyroX = (random(-50, 50) / 10.0);
+        imuData.gyroY = (random(-50, 50) / 10.0);
+        imuData.gyroZ = (random(-50, 50) / 10.0);
+        imuData.temperature = 25.0 + (random(-50, 50) / 10.0);
+        imuData.magnitude = sqrt(imuData.accelX * imuData.accelX + 
+                                imuData.accelY * imuData.accelY + 
+                                imuData.accelZ * imuData.accelZ);
+        imuData.motionDetected = (imuData.magnitude > MOTION_THRESHOLD);
+        lastMockUpdate = millis();
+    }
 }
 
 bool createLogFile() {
     if (!systemData.sdCardAvailable) return false;
     
     sprintf(currentLogFilename, "/gps_%04d%02d%02d_%02d%02d%02d.bin",
-        myGNSS.getYear(), myGNSS.getMonth(), myGNSS.getDay(),
-        myGNSS.getHour(), myGNSS.getMinute(), myGNSS.getSecond());
+        gpsData.year, gpsData.month, gpsData.day,
+        gpsData.hour, gpsData.minute, gpsData.second);
     
     logFile = SD.open(currentLogFilename, FILE_WRITE);
     if (!logFile) {
@@ -374,7 +527,7 @@ void toggleLogging() {
             debugPrintln("⚪ Logging stopped");
         }
     } else {
-        if (systemData.sdCardAvailable && myGNSS.getFixType() >= 2) {
+        if (systemData.sdCardAvailable && (gpsData.fixType >= 2 || !ENABLE_GPS)) {
             systemData.loggingActive = true;
             if (createLogFile()) {
                 debugPrintln("🔴 Logging started");
@@ -581,7 +734,7 @@ void processDeferredFileOperations() {
     }
 }
 
-// BLE Callbacks (same as original)
+// BLE Callbacks
 class EnhancedConfigCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) {
         std::string stdValue = pCharacteristic->getValue();
@@ -592,7 +745,7 @@ class EnhancedConfigCallbacks : public BLECharacteristicCallbacks {
         debugPrintf("📝 Config command: %s\n", value.c_str());
         
         if (value == "START_LOG") {
-            if (systemData.sdCardAvailable && myGNSS.getFixType() >= 2) {
+            if (systemData.sdCardAvailable && (gpsData.fixType >= 2 || !ENABLE_GPS)) {
                 systemData.loggingActive = true;
                 uiManager.requestUpdate();
             }
@@ -666,102 +819,95 @@ class EnhancedServerCallbacks : public BLEServerCallbacks {
     }
 };
 
+bool initBLERobust() {
+    if (!ENABLE_BLE) {
+        debugPrintln("🔵 BLE disabled in configuration");
+        return false;
+    }
+    
+    try {
+        debugPrintln("🔵 Initializing BLE...");
+        BLEDevice::init("JC3248_GPS_Logger");
+        
+        BLEServer* pServer = BLEDevice::createServer();
+        pServer->setCallbacks(new EnhancedServerCallbacks());
+        
+        BLEService* pService = pServer->createService(telemetryServiceUUID);
+        
+        telemetryChar = pService->createCharacteristic(telemetryCharUUID, BLECharacteristic::PROPERTY_NOTIFY);
+        telemetryDescriptor = new BLE2902();
+        telemetryChar->addDescriptor(telemetryDescriptor);
+        
+        configChar = pService->createCharacteristic(configCharUUID, BLECharacteristic::PROPERTY_WRITE);
+        configChar->setCallbacks(new EnhancedConfigCallbacks());
+        
+        fileTransferChar = pService->createCharacteristic(
+            fileTransferCharUUID,
+            BLECharacteristic::PROPERTY_READ | 
+            BLECharacteristic::PROPERTY_WRITE | 
+            BLECharacteristic::PROPERTY_NOTIFY
+        );
+        fileTransferChar->setCallbacks(new EnhancedFileTransferCallbacks());
+        
+        pService->start();
+        
+        BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+        pAdvertising->addServiceUUID(telemetryServiceUUID);
+        pAdvertising->setScanResponse(true);
+        pAdvertising->start();
+        
+        debugPrintln("✅ BLE ready");
+        return true;
+    } catch (...) {
+        warnMissingHardware("BLE");
+        return false;
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     delay(3000);
-    Serial.println("🚀 JC3248W535EN GPS Logger v6.0 Starting...");
+    Serial.println("🚀 JC3248W535EN GPS Logger v6.1 Starting...");
+    Serial.println("🔧 Robust peripheral detection enabled");
     
-    // Initialize the UI Manager (this will handle display and touch initialization)
+    // Initialize the UI Manager first (always works)
     uiManager.init(&systemData, &gpsData, &imuData, &batteryData, &perfStats);
     uiManager.setFileTransferData(&fileTransfer);
     uiManager.setLoggingCallback(toggleLogging);
+    Serial.println("✅ UI Manager initialized");
     
-    // Initialize IMU on separate I2C bus
-    systemData.mpuAvailable = initMPU6050();
-    if (systemData.mpuAvailable) {
-        calibrateAccelerometer();
-    }
+    // Initialize peripherals with robust detection
+    systemData.mpuAvailable = initIMU();
+    systemData.sdCardAvailable = initSDCardRobust();
+    bool gpsAvailable = initGPS();
+    bool wifiAvailable = initWiFiRobust();
+    bool bleAvailable = initBLERobust();
     
-    // Initialize SD card
-    systemData.sdCardAvailable = initSDCard();
+    // System status summary
+    Serial.println("\n📊 System Status Summary:");
+    Serial.printf("   🖥️  Display: ✅ Ready\n");
+    Serial.printf("   🖱️  Touch:   %s\n", ENABLE_TOUCH ? "✅ Ready" : "❌ Disabled");
+    Serial.printf("   🛰️  GPS:     %s\n", gpsAvailable ? "✅ Connected" : "❌ Not found");
+    Serial.printf("   📄  IMU:     %s\n", systemData.mpuAvailable ? "✅ Connected" : "❌ Not found");
+    Serial.printf("   📱  SD Card: %s\n", systemData.sdCardAvailable ? "✅ Ready" : "❌ Not found");
+    Serial.printf("   📡  WiFi:    %s\n", wifiAvailable ? "✅ Connected" : "❌ Disabled/Failed");
+    Serial.printf("   🔵  BLE:     %s\n", bleAvailable ? "✅ Ready" : "❌ Failed");
     
-    // Initialize GNSS on specified pins
-    debugPrintln("🛰️ Starting GNSS...");
-    GNSS_Serial.begin(921600, SERIAL_8N1, GNSS_RX, GNSS_TX);
-    if (!myGNSS.begin(GNSS_Serial)) {
-        GNSS_Serial.end();
-        delay(100);
-        GNSS_Serial.begin(115200, SERIAL_8N1, GNSS_RX, GNSS_TX);
-        delay(100);
-        if (!myGNSS.begin(GNSS_Serial)) {
-            debugPrintln("❌ GNSS not detected!");
-        } else {
-            configureGNSS();
-        }
-    } else {
-        configureGNSS();
-    }
-    
-    if (wifiUDPEnabled) {
-        // Initialize WiFi
-        debugPrintln("📡 Connecting to WiFi...");
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(ssid, password);
-        
-        unsigned long wifiStart = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 20000) {
-            delay(1000);
-            debugPrint(".");
-        }
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            debugPrintln("\n✅ WiFi connected!");
-            debugPrintf("📍 IP: %s\n", WiFi.localIP().toString().c_str());
-        } else {
-            debugPrintln("\n❌ WiFi failed!");
-        }
-    }
-    
-    // Initialize BLE
-    debugPrintln("🔵 Initializing BLE...");
-    BLEDevice::init("JC3248_GPS_Logger");
-    BLEServer* pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new EnhancedServerCallbacks());
-    
-    BLEService* pService = pServer->createService(telemetryServiceUUID);
-    
-    telemetryChar = pService->createCharacteristic(telemetryCharUUID, BLECharacteristic::PROPERTY_NOTIFY);
-    telemetryDescriptor = new BLE2902();
-    telemetryChar->addDescriptor(telemetryDescriptor);
-    
-    configChar = pService->createCharacteristic(configCharUUID, BLECharacteristic::PROPERTY_WRITE);
-    configChar->setCallbacks(new EnhancedConfigCallbacks());
-    
-    fileTransferChar = pService->createCharacteristic(
-        fileTransferCharUUID,
-        BLECharacteristic::PROPERTY_READ | 
-        BLECharacteristic::PROPERTY_WRITE | 
-        BLECharacteristic::PROPERTY_NOTIFY
-    );
-    fileTransferChar->setCallbacks(new EnhancedFileTransferCallbacks());
-    
-    pService->start();
-    
-    BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(telemetryServiceUUID);
-    pAdvertising->setScanResponse(true);
-    pAdvertising->start();
-    
-    debugPrintln("✅ BLE ready");
-    
-    perfStats.lastResetTime = millis();
+    // Set system capabilities
+    systemData.touchAvailable = ENABLE_TOUCH;
     systemData.displayOn = true;
     systemData.lastDisplayActivity = millis();
-    systemData.touchAvailable = true; // JC3248W535EN has capacitive touch
     
-    debugPrintln("🎯 JC3248W535EN GPS Logger Ready!");
-    debugPrintln("🖱️ Capacitive touch interface");
-    debugPrintln("📤 BLE file transfer available");
+    perfStats.lastResetTime = millis();
+    
+    Serial.println("\n🎯 JC3248W535EN GPS Logger Ready!");
+    if (!gpsAvailable) {
+        Serial.println("📍 No GPS detected - will use mock data for UI testing");
+    }
+    if (!systemData.mpuAvailable) {
+        Serial.println("🎯 No IMU detected - will use mock data for UI testing");
+    }
+    Serial.println("🖱️ Touch interface active");
 }
 
 void loop() {
@@ -770,7 +916,7 @@ void loop() {
     static unsigned long lastWiFiCheck = 0;
     static unsigned long lastPerfReset = 0;
     
-    // Handle LVGL tasks
+    // Handle LVGL tasks - this is critical for UI responsiveness
     lv_timer_handler();
     uiManager.update();
     
@@ -783,13 +929,15 @@ void loop() {
     // Update battery data
     updateBatteryData();
     
-    // Read IMU data
-    if (systemData.mpuAvailable) {
+    // Read IMU data or generate mock data
+    if (systemData.mpuAvailable && ENABLE_IMU) {
         readMPU6050();
+    } else {
+        generateMockIMUData();  // Provide mock data for UI testing
     }
     
     // WiFi check (if enabled)
-    if (wifiUDPEnabled && millis() - lastWiFiCheck > 30000) {
+    if (ENABLE_WIFI && wifiUDPEnabled && millis() - lastWiFiCheck > 30000) {
         lastWiFiCheck = millis();
         if (WiFi.status() != WL_CONNECTED) {
             WiFi.disconnect();
@@ -808,8 +956,10 @@ void loop() {
         perfStats.totalPackets = 0;
     }
     
-    // Process GPS data
-    if (myGNSS.getPVT()) {
+    // Process GPS data or generate mock data
+    bool hasGPSData = false;
+    if (ENABLE_GPS && myGNSS.getPVT()) {
+        hasGPSData = true;
         unsigned long now = millis();
         unsigned long delta = now - lastPacketTime;
         
@@ -829,6 +979,17 @@ void loop() {
         gpsData.minute = myGNSS.getMinute();
         gpsData.second = myGNSS.getSecond();
         
+        lastPacketTime = now;
+    } else if (!ENABLE_GPS) {
+        generateMockGPSData();  // Provide mock data for UI testing
+        hasGPSData = true;
+    }
+    
+    // Create and transmit data packet (with real or mock data)
+    if (hasGPSData || !ENABLE_GPS) {
+        unsigned long now = millis();
+        unsigned long delta = now - lastPacketTime;
+        
         // Update performance stats
         perfStats.totalPackets++;
         if (lastPacketTime > 0) {
@@ -841,18 +1002,18 @@ void loop() {
         // Create GPS packet for transmission
         GPSPacket packet;
         packet.timestamp = gpsData.timestamp;
-        packet.latitude = myGNSS.getLatitude();
-        packet.longitude = myGNSS.getLongitude();
-        packet.altitude = myGNSS.getAltitude();
-        packet.speed = myGNSS.getGroundSpeed();
-        packet.heading = myGNSS.getHeading();
+        packet.latitude = (int32_t)(gpsData.latitude * 1e7);
+        packet.longitude = (int32_t)(gpsData.longitude * 1e7);
+        packet.altitude = gpsData.altitude * 1000;  // m to mm
+        packet.speed = (uint16_t)(gpsData.speed / 0.0036);  // km/h to mm/s
+        packet.heading = (uint32_t)(gpsData.heading * 1e5);
         packet.fixType = gpsData.fixType;
         packet.satellites = gpsData.satellites;
         
         packet.battery_mv = (uint16_t)(batteryData.voltage * 1000.0f);
         packet.battery_pct = batteryData.percentage;
         
-        if (systemData.mpuAvailable) {
+        if (systemData.mpuAvailable || !ENABLE_IMU) {
             packet.accel_x = (int16_t)(imuData.accelX * 1000);
             packet.accel_y = (int16_t)(imuData.accelY * 1000);
             packet.accel_z = (int16_t)(imuData.accelZ * 1000);
@@ -863,28 +1024,27 @@ void loop() {
             packet.gyro_x = packet.gyro_y = 0;
         }
         
-        // PMU status byte (adapted for JC3248W535EN)
         packet.pmu_status = (batteryData.isCharging ? 0x01 : 0x00) |
                            (batteryData.usbConnected ? 0x02 : 0x00) |
                            (batteryData.isConnected ? 0x04 : 0x00);
        
         packet.crc = crc16((uint8_t*)&packet, sizeof(GPSPacket) - 2);
         
-        // Send via UDP (if WiFi enabled)
-        if (wifiUDPEnabled && WiFi.status() == WL_CONNECTED) {
+        // Send via UDP (if WiFi enabled and connected)
+        if (ENABLE_WIFI && wifiUDPEnabled && WiFi.status() == WL_CONNECTED) {
             udp.beginPacket(remoteIP, remotePort);
             udp.write((uint8_t*)&packet, sizeof(GPSPacket));
             udp.endPacket();
         }
         
-        // Send via BLE
-        if (telemetryChar && telemetryDescriptor->getNotifications()) {
+        // Send via BLE (if enabled and connected)
+        if (ENABLE_BLE && telemetryChar && telemetryDescriptor && telemetryDescriptor->getNotifications()) {
             telemetryChar->setValue((uint8_t*)&packet, sizeof(GPSPacket));
             telemetryChar->notify();
         }
         
-        // Log to SD
-        if (systemData.loggingActive && systemData.sdCardAvailable) {
+        // Log to SD (if enabled and available)
+        if (ENABLE_SD_CARD && systemData.loggingActive && systemData.sdCardAvailable) {
             if (!logFile) {
                 createLogFile();
             }
@@ -916,8 +1076,9 @@ void loop() {
         if (now - lastDebugTime >= 10000) {
             lastDebugTime = now;
             
-            debugPrintf("📊 GPS: %02d/%02d/%04d %02d:%02d:%02d UTC | ",
-                gpsData.day, gpsData.month, gpsData.year,
+            String dataSource = ENABLE_GPS ? "GPS" : "MOCK";
+            debugPrintf("📊 %s: %02d/%02d/%04d %02d:%02d:%02d | ",
+                dataSource.c_str(), gpsData.day, gpsData.month, gpsData.year,
                 gpsData.hour, gpsData.minute, gpsData.second);
             
             debugPrintf("Fix:%d Sats:%d Speed:%.1fkm/h Batt:%.1fV(%d%%)\n",
@@ -927,41 +1088,13 @@ void loop() {
             debugPrintf("⚡ Perf: Δ=%lums Pkts:%lu Drop:%lu RAM:%d\n",
                 delta, perfStats.totalPackets, perfStats.droppedPackets, ESP.getFreeHeap());
             
-            // File transfer status
-            if (fileTransfer.active) {
-                debugPrintf("📤 Transfer: %s %.1f%% (%d/%d bytes)\n",
-                    fileTransfer.filename.c_str(), fileTransfer.progressPercent,
-                    fileTransfer.bytesSent, fileTransfer.fileSize);
-            }
-            
-            // IMU status
-            if (systemData.mpuAvailable) {
-                debugPrintf("📄 IMU: %.1fg %s Temp:%.1f°C\n",
-                    imuData.magnitude, 
-                    imuData.motionDetected ? "Motion" : "Still",
-                    imuData.temperature);
-            }
-            
-            // System status
-            debugPrintf("🔗 Status: WiFi:%s BLE:%s SD:%s Log:%s Touch:%s\n",
-                WiFi.status() == WL_CONNECTED ? "✅" : "❌",
-                telemetryDescriptor->getNotifications() ? "✅" : "❌",
+            // Peripheral status
+            debugPrintf("🔗 Active: Display:✅ GPS:%s IMU:%s SD:%s WiFi:%s BLE:%s\n",
+                ENABLE_GPS ? "✅" : "🔄",
+                systemData.mpuAvailable ? "✅" : "🔄", 
                 systemData.sdCardAvailable ? "✅" : "❌",
-                systemData.loggingActive ? "✅" : "❌",
-                systemData.touchAvailable ? "✅" : "❌");
-            
-            // Display info
-            debugPrintf("🖥️ Display: JC3248W535EN %dx%d Portrait LVGL\n", 
-                BOARD_TFT_WIDTH, BOARD_TFT_HEIGHT);
-            
-            // Deferred operations status
-            if (pendingListFiles || pendingStartTransfer || pendingDeleteFile || pendingCancelTransfer) {
-                debugPrintf("⏳ Pending: List:%s Transfer:%s Delete:%s Cancel:%s\n",
-                    pendingListFiles ? "YES" : "NO",
-                    pendingStartTransfer ? "YES" : "NO", 
-                    pendingDeleteFile ? "YES" : "NO",
-                    pendingCancelTransfer ? "YES" : "NO");
-            }
+                (ENABLE_WIFI && WiFi.status() == WL_CONNECTED) ? "✅" : "❌",
+                (ENABLE_BLE && telemetryDescriptor && telemetryDescriptor->getNotifications()) ? "✅" : "❌");
         }
     }
     
