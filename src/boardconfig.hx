@@ -1,9 +1,12 @@
 #define WIFI_SSID "Puchatkova"
 #define WIFI_PASSWORD "Internet2@"
+#define boardtype ""//T-Display-S3-Pro, JC3248W535EN
+
 
 bool debugMode = false;
 
 // T-Display-S3-Pro Hardware Pin Definitions
+if (boardtype == "T-Display-S3-Pro") {
 #define BOARD_I2C_SDA       5
 #define BOARD_I2C_SCL       6
 #define BOARD_SPI_MISO      8
@@ -23,6 +26,19 @@ bool debugMode = false;
 #define BOARD_TFT_HEIGHT    222
 #define GNSS_RX             43
 #define GNSS_TX             44
+}
+if (boardtype == "JC3248W535EN") {
+#define GFX_BL 1
+#define TOUCH_ADDR 0x3B
+#define TOUCH_SDA 4
+#define TOUCH_SCL 8
+#define TOUCH_I2C_CLOCK 400000
+#define TOUCH_RST_PIN 12
+#define TOUCH_INT_PIN 11
+#define AXS_MAX_TOUCH_NUMBER 1
+
+}
+
 
 // BLE Configuration
 const char* telemetryServiceUUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
