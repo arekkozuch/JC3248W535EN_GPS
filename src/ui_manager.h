@@ -2,8 +2,13 @@
 #define UI_MANAGER_H
 
 #include <lvgl.h>
+#include <Arduino_GFX_Library.h>
 #include "data_structures.h"
 #include "boardconfig.h"
+
+// Forward declarations for Arduino_GFX objects
+extern Arduino_DataBus *bus;
+extern Arduino_GFX *gfx;
 
 class UIManager {
 public:
@@ -14,15 +19,18 @@ public:
     void init(SystemData* sysData, GPSData* gpsData, IMUData* imuData, 
               BatteryData* battData, PerformanceStats* perfData);
     
-    // Simplified LVGL callbacks (static functions)
-    static void lvgl_display_flush_simple(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p);
-    static void lvgl_touch_read_simple(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
+    // Hardware initialization for JC3248W535EN
+    bool initializeDisplayHardware();
+    
+    // LVGL callbacks (static functions)
+    static void lvgl_display_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p);
+    static void lvgl_touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
     
     // Main update function
     void update();
     void requestUpdate();
     
-    // Screen management (simplified)
+    // Screen management
     void showScreen(ScreenType screen);
     void nextScreen();
     void previousScreen();
@@ -33,7 +41,7 @@ public:
     void setMenuCallback(void (*callback)());
     void setSystemCallback(void (*callback)());
     
-    // File transfer support (placeholder)
+    // File transfer support
     void setFileTransferData(FileTransferState* ft) { fileTransferPtr = ft; }
     void updateFileTransferUI();
     
@@ -49,7 +57,7 @@ private:
     PerformanceStats* perfStats;
     FileTransferState* fileTransferPtr;
     
-    // LVGL objects (minimal set)
+    // LVGL objects (minimal set for testing)
     lv_obj_t* mainScreen;
     lv_obj_t* progressBar;
     lv_obj_t* transferLabel;
@@ -69,17 +77,17 @@ private:
     void (*menuCallback)();
     void (*systemCallback)();
     
-    // Private methods (simplified)
-    void createSimpleTestScreen();
+    // Private methods
+    void createWorkingTestScreen();
     
-    // Utility functions (simplified)
+    // Utility functions
     lv_color_t getSpeedColor(float speed);
     lv_color_t getPerformanceColor(float value, float good, float excellent);
     lv_color_t getSignalColor(int strength);
     void setBatteryIcon(uint8_t percentage, bool charging, bool connected);
     void setStatusIcon(lv_obj_t* icon, bool connected, const char* symbol);
     
-    // Static event handlers (simplified)
+    // Static event handlers
     static void buttonEventHandler(lv_event_t* e);
     static void screenEventHandler(lv_event_t* e);
 };
