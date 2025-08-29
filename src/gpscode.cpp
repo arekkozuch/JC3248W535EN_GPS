@@ -59,33 +59,20 @@ class EnhancedFileTransferCallbacks;
 class EnhancedServerCallbacks;
 
 // Debug functions with peripheral check
-// SAFE debug functions that prevent memory corruption
-void safePrint(const char* message) {
-    if (debugMode && DEBUG_PERIPHERAL_INIT && message) {
-        Serial.print(message);
-    }
+void debugPrint(const char* message) {
+    if(debugMode && DEBUG_PERIPHERAL_INIT) Serial.print(message);
 }
 
-void safePrintln(const String& message) {
-    if (debugMode && DEBUG_PERIPHERAL_INIT) {
-        Serial.println(message);
-    }
+void debugPrintln(const String& message) {
+    if(debugMode && DEBUG_PERIPHERAL_INIT) Serial.println(message);
 }
 
-void safePrintf(const char* format, ...) {
-    if (!debugMode || !DEBUG_PERIPHERAL_INIT || !format) return;
-    
-    // Create a safe buffer and limit the output
-    char safeBuffer[256];
-    va_list args;
-    va_start(args, format);
-    int written = vsnprintf(safeBuffer, sizeof(safeBuffer) - 1, format, args);
-    va_end(args);
-    
-    // Ensure null termination
-    if (written > 0 && written < sizeof(safeBuffer)) {
-        safeBuffer[written] = '\0';
-        Serial.print(safeBuffer);
+void debugPrintf(const char* format, ...) {
+    if(debugMode && DEBUG_PERIPHERAL_INIT) {
+        va_list args;
+        va_start(args, format);
+        Serial.printf(format, args);
+        va_end(args);
     }
 }
 
